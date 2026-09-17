@@ -1,0 +1,62 @@
+name: Deploy Lambda with OpenTofu
+
+on:
+  workflow_run:
+    workflows:
+      - Build and push Docker image
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Image tag to deploy
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+  TF_VAR_vpc_id: ${{ vars.VPC_ID }}
+  TF_VAR_subnet_ids: ${{ vars.SUBNET_IDS }}
+  TF_VAR_ecr_repository: ${{ vars.ECR_REPOSITORY }}
+  TF_VAR_image_tag: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.image_tag }}
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up OpenTofu
+        uses: opentofu/setup-opentofu@v1
+
+      - name: Initialize OpenTofu
+        working-directory: terraform
+        run: tofu init -input=false
+
+      - name: Validate OpenTofu configuration
+        working-directory: terraform
+        run: tofu validate
+
+      - name: Plan OpenTofu changes
+        working-directory: terraform
+        run: tofu plan -input=false -out=tfplan
+
+      - name: Apply OpenTofu changes
+        working-directory: terraform
+        run: tofu apply -input=false tfplan
